@@ -287,7 +287,7 @@ namespace CTA.Rules.Analyzer
                                     var wildcardMatches = _rootNodes.Invocationexpressiontokens.Where(i => i.Key.Contains("*"));
                                     if (wildcardMatches.Any())
                                     {
-                                        token = wildcardMatches.FirstOrDefault(i => compareToken.Key.WildcardEquals(i.Key) && compareToken.Namespace == i.Namespace && compareToken.Type == i.Type);
+                                        token = wildcardMatches.FirstOrDefault(i => compareToken.Namespace == i.Namespace && compareToken.Type == i.Type && compareToken.Key.WildcardEquals(i.Key));
 
                                         if (token != null)
                                         {
