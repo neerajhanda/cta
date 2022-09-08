@@ -14,6 +14,7 @@ using Codelyzer.Analysis.Model;
 using CTA.FeatureDetection;
 using CTA.FeatureDetection.Common.Models;
 using CTA.FeatureDetection.ProjectType.Extensions;
+using CTA.Rules.Common.Helpers;
 using CTA.Rules.Config;
 using CTA.Rules.Metrics;
 using CTA.Rules.Models;
@@ -30,16 +31,17 @@ namespace CTA.Rules.PortCore
     {
         private SolutionRewriter _solutionRewriter;
         private readonly string _solutionPath;
+        private readonly RecommendationsCachedHttpService _httpService;
         private readonly PortSolutionResult _portSolutionResult;
         private readonly MetricsContext _context;
         private Dictionary<string, FeatureDetectionResult> _projectTypeFeatureResults;
         private readonly IDEProjectResult _projectResult;
         private SolutionResult _solutionAnalysisResult;
         private SolutionResult _solutionRunResult;
-        internal ConcurrentDictionary<string,bool> SkipDownloadFiles;
+        internal ConcurrentDictionary<string, bool> SkipDownloadFiles;
 
 
-        public SolutionPort(string solutionFilePath, ILogger logger = null)
+        public SolutionPort(string solutionFilePath, RecommendationsCachedHttpService httpService, ILogger logger = null)
         {
             if (logger != null)
             {
@@ -48,6 +50,7 @@ namespace CTA.Rules.PortCore
 
             _portSolutionResult = new PortSolutionResult(solutionFilePath);
             _solutionPath = solutionFilePath;
+            _httpService = httpService;
             _context = new MetricsContext(solutionFilePath);
             _solutionAnalysisResult = new SolutionResult();
             _solutionRunResult = new SolutionResult();
@@ -119,7 +122,7 @@ namespace CTA.Rules.PortCore
             _context = new MetricsContext(solutionFilePath, analyzerResults);
             InitSolutionRewriter(analyzerResults, solutionConfiguration);
         }
-        
+
         public SolutionPort(string solutionFilePath, IDEProjectResult projectResult, List<PortCoreConfiguration> solutionConfiguration)
         {
             _solutionPath = solutionFilePath;
@@ -138,15 +141,22 @@ namespace CTA.Rules.PortCore
             _solutionRewriter = new SolutionRewriter(analyzerResults, solutionConfiguration.ToList<ProjectConfiguration>(), projectRewriterFactory);
         }
 
-        public ProjectResult RunProject(AnalyzerResult analyzerResult, PortCoreConfiguration portCoreConfiguration)
+        public async Task<ProjectResult> RunProject(AnalyzerResult analyzerResult, PortCoreConfiguration portCoreConfiguration)
         {
-            var projectPort = new ProjectPort(analyzerResult, portCoreConfiguration, this);
-            portCoreConfiguration.AdditionalReferences.Add(Constants.ProjectRecommendationFile);
-            var projectAnalysisResult = projectPort.AnalysisRun();
-            var projectResult = projectPort.Run();
-            _portSolutionResult.References.UnionWith(projectPort.ProjectReferences);
-            AppendProjectResult(projectAnalysisResult, projectResult, analyzerResult, projectPort.ProjectTypeFeatureResults);
-            return projectResult;
+            var projectPort = new ProjectPort(analyzerResult, portCoreConfiguration, _httpService);
+            await projectPort.Initialize;
+            if (projectPort.Initiated)
+            {
+                portCoreConfiguration.AdditionalReferences.Add(Constants.ProjectRecommendationFile);
+                var projectAnalysisResult = projectPort.AnalysisRun();
+                var projectResult = projectPort.Run();
+                _portSolutionResult.References.UnionWith(projectPort.ProjectReferences);
+                AppendProjectResult(projectAnalysisResult, projectResult, analyzerResult,
+                    projectPort.ProjectTypeFeatureResults);
+                return projectResult;
+            }
+
+            throw new ApplicationException("Could not initialize ProjectPort");
         }
 
         private void AppendProjectResult(ProjectResult projectAnalysisResult, ProjectResult projectResult, AnalyzerResult analyzerResult, FeatureDetectionResult featureDetectionResult)
@@ -158,45 +168,7 @@ namespace CTA.Rules.PortCore
         }
 
 
-        internal void DownloadRecommendationFiles(HashSet<string> allReferences)
-        {
-            using var httpClient = new HttpClient();
-            ConcurrentBag<string> matchedFiles = new ConcurrentBag<string>();
-
-            var parallelOptions = new ParallelOptions() { MaxDegreeOfParallelism = Constants.ThreadCount };
-            Parallel.ForEach(allReferences, parallelOptions, recommendationNamespace =>
-            {
-                if (!string.IsNullOrEmpty(recommendationNamespace))
-                {
-                    var fileName = string.Concat(recommendationNamespace.ToLower(), ".json");
-                    var fullFileName = Path.Combine(Constants.RulesDefaultPath, fileName);
-                    try
-                    {
-                        if (!SkipDownloadFiles.ContainsKey(fullFileName))
-                        {
-                            //Download only if it's not available
-                            if (!File.Exists(fullFileName))
-                            {
-                                var fileContents = httpClient.GetStringAsync(string.Concat(Constants.S3RecommendationsBucketUrl, "/", fileName)).Result;
-                                File.WriteAllText(fullFileName, fileContents);
-                            }
-                            matchedFiles.Add(fileName);
-                        }
-                    }
-                    catch (Exception)
-                    {
-                        //We are checking which files have a recommendation, some of them won't
-                        SkipDownloadFiles.TryAdd(fullFileName, false);
-                    }
-                }
-            });
-
-            matchedFiles?.ToHashSet<string>()?.ToList().ForEach(file => { _portSolutionResult.DownloadedFiles.Add(file); });
-
-            LogHelper.LogInformation("Found recommendations for the below:{0}{1}", Environment.NewLine, string.Join(Environment.NewLine, matchedFiles.Distinct()));
-        }
-
-        private void InitRules(List<PortCoreConfiguration> solutionConfiguration, List<AnalyzerResult> analyzerResults)
+        private async Task InitRules(List<PortCoreConfiguration> solutionConfiguration, List<AnalyzerResult> analyzerResults)
         {
             using var projectTypeFeatureDetector = new FeatureDetector();
 
@@ -209,13 +181,13 @@ namespace CTA.Rules.PortCore
             foreach (var projectConfiguration in solutionConfiguration)
             {
                 var projectTypeFeatureResult = _projectTypeFeatureResults[projectConfiguration.ProjectPath];
-                projectConfiguration.ProjectType = GetProjectType(projectTypeFeatureResult);
+                projectConfiguration.ProjectType = PortCoreUtils.GetProjectType(projectTypeFeatureResult);
                 if (projectConfiguration.UseDefaultRules)
                 {
                     //If a rules dir was provided, copy files from that dir into the rules folder
                     if (!string.IsNullOrEmpty(projectConfiguration.RulesDir))
                     {
-                        CopyOverrideRules(projectConfiguration.RulesDir);
+                        PortCoreUtils.CopyOverrideRules(projectConfiguration.RulesDir);
                     }
                     projectConfiguration.RulesDir = Constants.RulesDefaultPath;
                     allReferences.UnionWith(PortCoreUtils.GetReferencesForProject(
@@ -224,7 +196,7 @@ namespace CTA.Rules.PortCore
                             projectConfiguration.ProjectPath)));
                 }
                 AddWCFReferences(projectConfiguration);
-                
+
                 projectConfiguration.AdditionalReferences.Add(Constants.ProjectRecommendationFile);
 
                 allReferences.UnionWith(projectConfiguration.AdditionalReferences);
@@ -232,7 +204,10 @@ namespace CTA.Rules.PortCore
 
             _portSolutionResult.References = allReferences.ToHashSet<string>();
 
-            DownloadRecommendationFiles(allReferences);
+            //TODO: Uncomment
+            //var matchedFiles = await DownloadRecommendationFiles(allReferences);
+            //matchedFiles.ForEach(file => { _portSolutionResult.DownloadedFiles.Add(file); });
+            //LogHelper.LogInformation("Found recommendations for the below:{0}{1}", Environment.NewLine, string.Join(Environment.NewLine, matchedFiles.Distinct()));
 
         }
 
@@ -283,7 +258,7 @@ namespace CTA.Rules.PortCore
         public SolutionResult AnalysisRun()
         {
             // If the solution was already analyzed, don't duplicate the results
-            if (_solutionAnalysisResult != null) 
+            if (_solutionAnalysisResult != null)
             {
                 return _solutionAnalysisResult;
             }
@@ -354,22 +329,12 @@ namespace CTA.Rules.PortCore
             return _solutionRewriter.RunIncremental(projectRules, new List<string> { updatedFile });
         }
 
-        internal void CopyOverrideRules(string sourceDir)
-        {
-            // Skip overriding the same directory.
-            if(sourceDir == Constants.RulesDefaultPath) { 
-                return; 
-            }
-            var files = Directory.EnumerateFiles(sourceDir, "*.json").ToList();
-            files.ForEach(file => {
-                File.Copy(file, Path.Combine(Constants.RulesDefaultPath, Path.GetFileName(file)), true);
-            });
-        }
+
 
         private void CheckCache()
         {
             ResetCache();
-            DownloadResourceFiles();            
+            DownloadResourceFiles();
         }
 
         public static void ResetCache()
@@ -426,62 +391,7 @@ namespace CTA.Rules.PortCore
         {
             Utils.DownloadFilesToFolder(Constants.S3TemplatesBucketUrl, Constants.ResourcesExtractedPath, Constants.TemplateFiles);
         }
-        
-        internal ProjectType GetProjectType(FeatureDetectionResult projectTypeFeatureResult)
-        {
-            if (projectTypeFeatureResult.IsVBNetMvcProject())
-            {
-                return ProjectType.VBNetMvc;
-            }
-            else if (projectTypeFeatureResult.IsVBWebFormsProject())
-            {
-                return ProjectType.VBWebForms;
-            }
-            else if (projectTypeFeatureResult.IsVBWebApiProject())
-            {
-                return ProjectType.VBWebApi;
-            }
-            else if (projectTypeFeatureResult.IsVBClassLibraryProject())
-            {
-                return ProjectType.VBClassLibrary;
-            }
-            else if (projectTypeFeatureResult.IsMvcProject())
-            {
-                return ProjectType.Mvc;
-            }
-            else if (projectTypeFeatureResult.IsWebApiProject())
-            {
-                return ProjectType.WebApi;
-            }
-            else if (projectTypeFeatureResult.IsAspNetWebFormsProject())
-            {
-                return ProjectType.WebForms;
-            }
-            else if (projectTypeFeatureResult.IsWebClassLibrary())
-            {
-                return ProjectType.WebClassLibrary;
-            }
-            else if (projectTypeFeatureResult.IsWCFServiceConfigBasedProject())
-            {
-                if(projectTypeFeatureResult.HasServiceHostReference())
-                {
-                    return ProjectType.WCFConfigBasedService;
-                }
-                else
-                {
-                    return ProjectType.WCFServiceLibrary;
-                }
-            }
-            else if (projectTypeFeatureResult.IsWCFServiceCodeBasedProject())
-            {
-                return ProjectType.WCFCodeBasedService;
-            }
-            else if (projectTypeFeatureResult.IsWCFClientProject())
-            {
-                return ProjectType.WCFClient;
-            }
 
-            return ProjectType.ClassLibrary;
-        }
+
     }
 }

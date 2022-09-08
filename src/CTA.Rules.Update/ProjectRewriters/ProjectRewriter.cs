@@ -23,7 +23,7 @@ namespace CTA.Rules.Update
         protected readonly List<RootUstNode> _sourceFileResults;
         protected readonly List<SourceFileBuildResult> _sourceFileBuildResults;
         protected readonly List<string> _projectReferences;
-        protected readonly ProjectResult _projectResult;
+        protected readonly PortProjectResult _projectResult;
         protected readonly List<string> _metaReferences;
         protected readonly AnalyzerResult _analyzerResult;
         protected readonly ProjectLanguage _projectLanguage;
@@ -36,9 +36,8 @@ namespace CTA.Rules.Update
         /// <param name="projectConfiguration">ProjectConfiguration for this project</param>
         public ProjectRewriter(AnalyzerResult analyzerResult, ProjectConfiguration projectConfiguration)
         {
-            _projectResult = new ProjectResult()
+            _projectResult = new PortProjectResult(projectConfiguration.ProjectPath)
             {
-                ProjectFile = projectConfiguration.ProjectPath,
                 TargetVersions = projectConfiguration.TargetVersions,
                 SourceVersions = projectConfiguration.SourceVersions,
                 UpgradePackages = projectConfiguration.PackageReferences.Select(p => new PackageAction()
@@ -66,9 +65,8 @@ namespace CTA.Rules.Update
             _sourceFileBuildResults = projectResult.SourceFileBuildResults;
             ProjectConfiguration = projectConfiguration;
 
-            _projectResult = new ProjectResult()
+            _projectResult = new PortProjectResult(projectConfiguration.ProjectPath)
             {
-                ProjectFile = projectConfiguration.ProjectPath,
                 TargetVersions = projectConfiguration.TargetVersions,
                 SourceVersions = projectConfiguration.SourceVersions,
                 UpgradePackages = projectConfiguration.PackageReferences.Select(p => new PackageAction()
@@ -85,17 +83,17 @@ namespace CTA.Rules.Update
         /// Initializes the project rewriter by getting a list of actions that will be run
         /// </summary>
         /// <returns>A list of project actions to be run</returns>
-        public ProjectResult Initialize()
+        public PortProjectResult Initialize()
         {
             ProjectActions projectActions = new ProjectActions();
             try
             {
                 var allReferences = _sourceFileResults?.SelectMany(s => s.References)
                         .Union(_sourceFileResults.SelectMany(s => s.Children.OfType<UsingDirective>())?.Select(u => new Reference() { Namespace = u.Identifier, Assembly = u.Identifier }).Distinct())
-                        .Union(_sourceFileResults.SelectMany(s => s.Children.OfType<ImportsStatement>())?.Select(u => new Reference() {Namespace = u.Identifier, Assembly = u.Identifier }).Distinct())
+                        .Union(_sourceFileResults.SelectMany(s => s.Children.OfType<ImportsStatement>())?.Select(u => new Reference() { Namespace = u.Identifier, Assembly = u.Identifier }).Distinct())
                         .Union(ProjectConfiguration.AdditionalReferences.Select(r => new Reference { Assembly = r, Namespace = r }));
                 RulesFileLoader rulesFileLoader = new RulesFileLoader(allReferences, ProjectConfiguration.RulesDir, ProjectConfiguration.TargetVersions, _projectLanguage, string.Empty, ProjectConfiguration.AssemblyDir);
-                
+
                 var projectRules = rulesFileLoader.Load();
 
                 HashSet<NodeToken> projectTokens;
@@ -110,7 +108,7 @@ namespace CTA.Rules.Update
                     _rulesAnalyzer = new RulesAnalysis(_sourceFileResults, projectRules.CsharpRootNodes, ProjectConfiguration.ProjectType);
                     projectTokens = projectRules.CsharpRootNodes.ProjectTokens;
                 }
-                
+
                 projectActions = _rulesAnalyzer.Analyze();
                 _projectReferences.ForEach(p =>
                 {
@@ -192,7 +190,7 @@ namespace CTA.Rules.Update
 
             List<IDEFileActions> ideFileActions = projectActions
                 .FileActions
-                .SelectMany(f => f.NodeTokens.Select(n => new IDEFileActions() { TextSpan = n.TextSpan,  Description = n.Description, FilePath = f.FilePath, TextChanges = n.TextChanges }))
+                .SelectMany(f => f.NodeTokens.Select(n => new IDEFileActions() { TextSpan = n.TextSpan, Description = n.Description, FilePath = f.FilePath, TextChanges = n.TextChanges }))
                 .ToList();
             return ideFileActions;
         }
