@@ -43,7 +43,7 @@ namespace CTA.Rules.PortCore
         /// Runs the project rewriter using a previously initialized analysis
         /// </summary>
         /// <param name="projectActions"></param>
-        public override ProjectResult Run(ProjectActions projectActions)
+        public override PortProjectResult Run(ProjectActions projectActions)
         {
             base.Run(projectActions);
 

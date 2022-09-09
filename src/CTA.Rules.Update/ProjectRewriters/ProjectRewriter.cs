@@ -155,7 +155,7 @@ namespace CTA.Rules.Update
         /// Runs the project rewriter using a previously initialized analysis
         /// </summary>
         /// <param name="projectActions"></param>
-        public virtual ProjectResult Run(ProjectActions projectActions)
+        public virtual PortProjectResult Run(ProjectActions projectActions)
         {
             _projectResult.ProjectActions = projectActions;
             CodeReplacer baseReplacer = new CodeReplacer(_sourceFileBuildResults, ProjectConfiguration, _metaReferences, _analyzerResult, _projectLanguage, projectResult: _projectResult);

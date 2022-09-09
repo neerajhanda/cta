@@ -148,8 +148,8 @@ namespace CTA.Rules.PortCore
             if (projectPort.Initiated)
             {
                 portCoreConfiguration.AdditionalReferences.Add(Constants.ProjectRecommendationFile);
-                var projectAnalysisResult = projectPort.AnalysisRun();
-                var projectResult = projectPort.Run();
+                var projectAnalysisResult = projectPort.RunAnalysis();
+                var projectResult = projectPort.Run(projectAnalysisResult);
                 _portSolutionResult.References.UnionWith(projectPort.ProjectReferences);
                 AppendProjectResult(projectAnalysisResult, projectResult, analyzerResult,
                     projectPort.ProjectTypeFeatureResults);

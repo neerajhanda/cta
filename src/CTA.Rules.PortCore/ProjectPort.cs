@@ -58,8 +58,7 @@ namespace CTA.Rules.PortCore
         {
             await InitRules(projectConfiguration, analyzerResult);
             _projectRewriter = _projectRewriterFactory.GetInstance(analyzerResult, projectConfiguration);
-            _portProjectResult = _projectRewriter.Initialize();
-            await DownloadRecommendationFiles();
+
         }
 
         private async Task InitRules(PortCoreConfiguration projectConfiguration, AnalyzerResult analyzerResult)
@@ -134,14 +133,14 @@ namespace CTA.Rules.PortCore
 
 
             LogHelper.LogInformation("Found recommendations for the below:{0}{1}", Environment.NewLine, string.Join(Environment.NewLine, matchedFiles.Distinct()));
-            matchedFiles?.ToHashSet().ToList().ForEach(file => { _portProjectResult.DownloadedFiles.Add(file); });
+            //matchedFiles?.ToHashSet().ToList().ForEach(file => { _portProjectResult.DownloadedFiles.Add(file); });
 
         }
 
         /// <summary>
         /// Initializes the Solution Port
         /// </summary>
-        public PortProjectResult AnalysisRun()
+        public PortProjectResult RunAnalysis()
         {
             // If the solution was already analyzed, don't duplicate the results
             if (_portProjectResult != null)
@@ -157,10 +156,20 @@ namespace CTA.Rules.PortCore
         /// <summary>
         /// Runs the Solution Port after creating an analysis
         /// </summary>
-        public ProjectResult Run()
+        public PortProjectResult Run(PortProjectResult analysisResult)
         {
             // Find actions to execute for each project
-            var projectAnalysisResult = AnalysisRun();
+            var projectActions = analysisResult.ProjectActions;
+
+            // Pass in the actions found to translate all files in each project
+            var projectRewriterResult = _projectRewriter.Run(projectActions);
+            return projectRewriterResult;
+        }
+
+        public PortProjectResult Run()
+        {
+            // Find actions to execute for each project
+            var projectAnalysisResult = RunAnalysis();
             var projectActions = projectAnalysisResult.ProjectActions;
 
             // Pass in the actions found to translate all files in each project
